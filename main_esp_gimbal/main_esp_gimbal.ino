@@ -13,16 +13,16 @@ double kp = 0.9, ki = 0, kd = 0;    // tuning parameters
 PID myPID(&Input, &Output, &Setpoint,kp,ki,kd, P_ON_E, DIRECT);
 
 // // motors
-int motor1Pin1 = 27;
-int motor1Pin2 = 26;
-int enable1Pin = 14;
+//int motor1Pin1 = 27;
+//int motor1Pin2 = 26;
+//int enable1Pin = 14;
 
 // esc
-int escPin = 27;
+int escPin = 14;
 
-int escPwmMin = 100;
-int escPwmMed = 140;
-int escPwmMax = 180;
+int escPwmMin = 60;
+int escPwmMax = 120;
+int escPwmMean = (escPwmMin + escPwmMax) / 2;
 
 int minAngle = -10;
 int maxAngle = 10;
@@ -68,20 +68,20 @@ void setup()
     delay(1);
   }
   // set pins as outputs
-  pinMode(motor1Pin1, OUTPUT);
-  pinMode(motor1Pin2, OUTPUT);
-  pinMode(enable1Pin, OUTPUT);
-  Serial.println("printing!");
+//  pinMode(motor1Pin1, OUTPUT);
+//  pinMode(motor1Pin2, OUTPUT);
+//  pinMode(enable1Pin, OUTPUT);
+//  Serial.println("printing!");
 
   // configure LED PWM functionality
-  ledcSetup(pwmChannel, freq, resolution);
+//  ledcSetup(pwmChannel, freq, resolution);
   Serial.println("printing 2!");
-  ledcAttachPin(enable1Pin, pwmChannel);
+//  ledcAttachPin(enable1Pin, pwmChannel);
   Serial.println("printing 3!");
 
   // ESC
   ESC.attach(escPin);
-  ESC.write(escSig);
+  ESC.write(escPwmMean);
   
   // setup accelerometer
   JY901.StartIIC();
@@ -93,6 +93,8 @@ void setup()
   myPID.SetMode(AUTOMATIC); 
   Serial.println("printing 6!");
   myPID.SetOutputLimits(-255,255);
+
+  delay(2000);
   Serial.println("exiting setup");
 } 
 
@@ -109,7 +111,7 @@ void loop()
   Serial.print(" Angle_x:"); Serial.print(angles[0]); Serial.print(" Angle_y:"); Serial.print(angles[1]); Serial.print(" Angle_z:"); Serial.print(angles[2]); //Serial.print("\n"); 
   Serial.print("\n");
               
-  delay(5);
+  delay(500);
 }
 
 void get_acc(float (& acc) [3])
@@ -203,28 +205,28 @@ void server_function(AsyncWebServerRequest * request, uint8_t *data_in, size_t l
   }
 }
 
-void set_motor(double dutyCycle) 
-{
-  int dc = int(dutyCycle);
-  if (dutyCycle > 0) // spin forwards
-  {
-    digitalWrite(motor1Pin1, HIGH);
-    digitalWrite(motor1Pin2, LOW);
-  } else { // spin backwards
-    digitalWrite(motor1Pin1, LOW);
-    digitalWrite(motor1Pin2, HIGH);
-    dc = abs(dc);
-  }
-//  dc = map(dc, 0, 45, 220, 255); 
-  dc = 255;
-  Serial.print(" duty_cycle: "); Serial.print(dc);
-  // set duty-cycle
-  ledcWrite(pwmChannel, dc);
-}
+//void set_motor(double dutyCycle) 
+//{
+//  int dc = int(dutyCycle);
+//  if (dutyCycle > 0) // spin forwards
+//  {
+//    digitalWrite(motor1Pin1, HIGH);
+//    digitalWrite(motor1Pin2, LOW);
+//  } else { // spin backwards
+//    digitalWrite(motor1Pin1, LOW);
+//    digitalWrite(motor1Pin2, HIGH);
+//    dc = abs(dc);
+//  }
+////  dc = map(dc, 0, 45, 220, 255); 
+//  dc = 255;
+//  Serial.print(" duty_cycle: "); Serial.print(dc);
+//  // set duty-cycle
+//  ledcWrite(pwmChannel, dc);
+//}
 
 void set_gimbal_motor(double angle)
 {
   escSig = map(angle, minAngle, maxAngle, escPwmMin, escPwmMax);
-  escSig = 180;
+  escSig = escPwmMean;
   ESC.write(escSig);
 }
