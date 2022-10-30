@@ -6,7 +6,15 @@ options = weboptions;
 options.Timeout = 15;
 
 data = struct();
-site = [site_name, 'sendangles']; 
+% percent weight for weighted average
+data.lidar_weight = .5;     
+data.smoothing = 'weighted_average';
+
+data.smoothing = 'var_average';
+data.lidar_var = 10;
+data.imu_var = 0.1;
+
+site = [site_name, 'data_processing']; 
 
 response = webwrite(site, data, options);
 

@@ -1,6 +1,7 @@
 #include <Adafruit_VL53L0X.h>
 #include <ArduinoJson.h>
 #include <JY901.h>
+#include <math.h>
 #include <PID_v1.h>
 #include <Servo.h>
 #include <WiFi.h>
@@ -48,6 +49,8 @@ float laltitude;
 
 // lidar
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
+double lidar_height_mm = 38 + 36.971; // 38 from bottom of base to to center of bearing; 36.971 from center of bearing to lidar mount
+double lidar = 0;
 
 // wifi communication with matlab
 const char* ssid = "Michaela-ESP-Access";  
@@ -55,6 +58,11 @@ const char* password = "123456789";
 
 AsyncWebServer server(80);
 DynamicJsonDocument jsonBuffer(256);
+
+String smoothing = "weighted_average";
+float lidar_weight = 0;
+float lidar_var = 1;
+float imu_var = 1;
 
 void setup() 
 {
@@ -69,10 +77,18 @@ void setup()
   delay(500);
   ramp_gimbal_motor_to_speed(escPwmMean, 5);  // ramp-up to mean speed (middle), step of 5 pulses
   
-  // setup accelerometer
+  // setup IMU
   JY901.StartIIC();
   Serial.println("printing 4!");
 
+  // setup lidar
+  if (!lox.begin()) {
+    Serial.println(F("Failed to boot VL53L0X"));
+    while(1);
+  }
+  lox.startRangeContinuous(); // start continuous ranging
+
+  // PID
   Input = get_angle(angles);
   Serial.println("printing 5!");
   Setpoint = 0;
@@ -80,6 +96,33 @@ void setup()
   Serial.println("printing 6!");
   myPID.SetOutputLimits(-255,255);
 
+  // WiFi
+  WiFi.softAP(ssid, password);
+  IPAddress IP = WiFi.softAPIP(); // IP address is 192.168.4.1
+  server.on("/data_processing",HTTP_POST,[](AsyncWebServerRequest * request){},
+    NULL,[](AsyncWebServerRequest * request, uint8_t *data_in, size_t len, size_t index, size_t total) {
+
+      // Using the webwrite() command in matlab you can send a value that can be read and associated witha  specific action 
+      String msg = String((char *)data_in, len); // takes the given value 
+      Serial.print("received message: ");   Serial.println(msg);
+
+      // parse the json message. the format is {"theta1":[float]; "theta2":[float]; "pen":[int]}
+      DeserializationError error = deserializeJson(jsonBuffer, msg); 
+      if (error) {
+        request->send_P(200, "text/plain", "-1"); 
+        Serial.println("error in json parsing");
+        return;
+      }
+
+      lidar_weight = jsonBuffer["lidar_weight"];
+      lidar_var = jsonBuffer["lidar_var"];
+      imu_var   = jsonBuffer["imu_var"];
+      smoothing = jsonBuffer["smoothing"].as<String>();
+
+      request->send_P(200, "text/plain", "1"); 
+  });
+  
+  server.begin();  // Start server (needed)
 
   Serial.println("setup done");
   delay(5000);
@@ -97,19 +140,11 @@ void loop()
   // print data for debugging
   Serial.print(" pid_output:");Serial.print(Output);
   Serial.print(" escSig:");Serial.print(escSig);
-  Serial.print(" Angle_x:"); Serial.print(angles[0]); Serial.print(" Angle_y:"); Serial.print(angles[1]); Serial.print(" Angle_z:"); Serial.print(angles[2]); //Serial.print("\n"); 
+  Serial.print(" Angle_x:"); Serial.print(angles[0]); Serial.print(" Angle_y:"); Serial.print(angles[1]); Serial.print(" Angle_z:"); Serial.print(angles[2]); 
+  Serial.print(" Lidar:"); Serial.print(lidar); //Serial.print("\n"); 
   Serial.print("\n");
               
   delay(500);
-}
-
-void get_acc(float (& acc) [3])
-{
-  JY901.GetAcc();
-  acc[0] = (float)JY901.stcAcc.a[0]/32768*16;
-  acc[1] = (float)JY901.stcAcc.a[1]/32768*16;
-  acc[2] = (float)JY901.stcAcc.a[2]/32768*16;
-
 }
 
 void get_gyro(float (& gyro) [3])
@@ -123,8 +158,34 @@ void get_gyro(float (& gyro) [3])
 
 double get_angle( float (& angles) [3])
 {
+  read_lidar();
   get_angles(angles);
-  return angles[1];
+  float imu_angle = angles[1];
+  float lidar_angle = lidar_to_angle(sign(imu_angle));
+  Serial.print(" lidar angle:"); Serial.print(lidar_angle);
+  if (smoothing.equals("weighted_average")) {
+    return lidar_weight*lidar_angle + (1-lidar_weight)*imu_angle;
+  } else if (smoothing.equals("var_average")) {
+    return (lidar_angle/lidar_var + imu_angle/imu_var) / (1/lidar_var + 1/imu_var);
+  } else {  // if invalid smoothing, just return angle from IMU
+    return imu_angle;  
+  }
+}
+
+double read_lidar()
+{
+  lidar = lox.readRange();
+  return lidar;
+}
+
+int sign(float x) {
+  if (x > 0) { return 1; }
+  if (x < 0) { return -1; }
+  return 0;
+}
+
+double lidar_to_angle(int sign) {
+  return sign * acos(lidar/lidar_height_mm) * RAD_TO_DEG;
 }
 
 void get_angles(float (& angle) [3])
@@ -133,48 +194,6 @@ void get_angles(float (& angle) [3])
   angle[0] = (float)JY901.stcAngle.Angle[0]/32768*180;
   angle[1] = (float)JY901.stcAngle.Angle[1]/32768*180;
   angle[2] = (float)JY901.stcAngle.Angle[2]/32768*180;
-
-}
-
-void get_mag(float (& mag) [3])
-{
-  JY901.GetMag();
-  mag[0] = (float)JY901.stcMag.h[0];
-  mag[1] = (float)JY901.stcMag.h[1];
-  mag[2] = (float)JY901.stcMag.h[2];
-
-}
-
-//String get_time()
-//{
-//  JY901.GetTime();
-//  return (JY901.stcTime.ucYear + "-" + JY901.stcTime.ucMonth.toString() + "-" + JY901.stcTime.ucDay.toString() + " " + JY901.stcTime.ucHour + ":" + JY901.stcTime.ucMinute + ":" + JY901.stcTime.ucSecond + "." + JY901.stcTime.usMiliSecond/1000);
-//
-//}
-
-void get_gps(float & gpsHeight, float & gpsYaw, float & gpsVelocity) 
-{
-  JY901.GetGPSV();
-  gpsHeight =   (float)JY901.stcGPSV.sGPSHeight/10;
-  gpsYaw =      (float)JY901.stcGPSV.sGPSYaw/10;
-  gpsVelocity = (float)JY901.stcGPSV.lGPSVelocity/1000;  
-
-}
-
-void get_dstatus(short (&dstatus) [4]) 
-{
-  JY901.GetDStatus();
-  dstatus[0] = (short)JY901.stcDStatus.sDStatus[0];
-  dstatus[1] = (short)JY901.stcDStatus.sDStatus[1];
-  dstatus[2] = (short)JY901.stcDStatus.sDStatus[2];
-  dstatus[3] = (short)JY901.stcDStatus.sDStatus[3];
-}
-
-void get_pressure(float & lpressure, float & laltitude)
-{
-  JY901.GetPress();
-  lpressure = JY901.stcPress.lPressure;
-  laltitude = (float)JY901.stcPress.lAltitude/100;
 
 }
 
@@ -226,4 +245,4 @@ int limited_map(double angle)
     return map(angle, minAngle, maxAngle, escPwmMin, escPwmMax);
   }
 
-}
+} 
